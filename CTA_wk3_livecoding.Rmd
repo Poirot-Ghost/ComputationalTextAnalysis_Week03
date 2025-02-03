@@ -15,6 +15,7 @@ library(tidyverse)
 library(quanteda)
 library(readtext)
 library(questionr)
+library(ggplot2)
 ```
 
 ## Data
@@ -27,7 +28,7 @@ You can also use the R menu at the top of your screen: Session / Set working dir
 ```{r}
 getwd()
 
-setwd("/Users/mlieutau/Documents/GitHub/ComputationalTextAnalysis_Week03")
+#setwd("/Users/mlieutau/Documents/GitHub/ComputationalTextAnalysis_Week03")
 ```
 
 ## import the barbie and oppenheimer data from the Github repo
@@ -57,6 +58,7 @@ barbie_oppenheimer_posts <- rbind(barbie_posts, oppenheimer_posts)
 freq(barbie_oppenheimer_posts$movie)
 
 # add row number variable
+  mutate(row = row_number())
 ```
 note: binding is a way of merging data (there are other ways)
 
@@ -66,35 +68,54 @@ note: binding is a way of merging data (there are other ways)
 ## corpus
 ```{r}
 #creating corpus
-
+corpus_barbie_oppenheimer <- corpus(barbie_oppenheimer_posts$Post.Text)
+summary(corpus_barbie_oppenheimer)
 #assigning names to each document
+docnames(corpus_barbie_oppenheimer) <- barbie_oppenheimer_posts$row
 ```
 
 ```{r}
 # subsetting corpus
-
+corpus_large_row <- corpus_subset(corpus_barbie_oppenheimer, 
+                                  as.numeric(docid(corpus_barbie_oppenheimer)) > 100)
 # extracting document-level variables
+docvars(corpus_barbie_oppenheimer, "movie") <- barbie_oppenheimer_posts$movie
+docvars(corpus_barbie_oppenheimer, "date") <- barbie_oppenheimer_posts$Post.Date
+docvars(corpus_barbie_oppenheimer)
 ```
 
 ## Tokenisation and cleanup
 ```{r}
 # start from corpus data
 # remove punctuation
+tokens_clean <- tokens(corpus_barbie_oppenheimer, 
+                       remove_punct = TRUE)
 # remove stopwords
+tokens_clean <- tokens_clean %>%
+  tokens_remove(stopwords("en"))
 # to lower but keep acronyms
+tokens_clean <- tokens_clean %>%
+  tokens_tolower(keep_acronyms = TRUE)
 ```
 
 ## document-feature matrix
 ```{r}
 # you can also do a lot of text data preprocessing after creating a Dfm, e.g. 
 # and you can use it to select or remove features
+dfm_clean <- dfm(tokens_clean)
+# remove features with less than 5 occurrences
+#dfm_clean <- dfm_trim(dfm_clean, min_termfreq = 5)
+dfm_clean
+topfeatures(dfm_clean, 10)
 ```
 
 ## removing features, introducing Regex
 
 Look up regex cheatsheet
 ```{r}
-
+# remove numbers
+dfm_clean <- dfm_clean %>% 
+  dfm_select(pattern = "\\d+", selection = "remove", valuetype = "regex") 
 ```
 
 # regular expressions, glob vs regex, fixed
@@ -110,11 +131,17 @@ Dictionary creation is done through the `dictionary()` function, which classes a
 ## creating your own dictionary
 ```{r}
 # create your own dictionary
+data_dictionary <- dictionary(list(
+  positive = c("good", "great", "awesome"),
+  negative = c("bad", "terrible", "awful")
+))
 ```
 
 The most frequent scenario is when we pass through a dictionary at the time of `dfm()` creation.
 ```{r}
 # dfm with dictionaries
+dfm_dictionary <- dfm_lookup(dfm_clean, 
+                      dictionary = data_dictionary)
 ```
 
 
@@ -131,18 +158,58 @@ data_dictionary_LSD2015_pos_neg <- data_dictionary_LSD2015[1:2]
 
 ```{r}
 # go back to our barbie/oppenheimer tokenised data
-
-
+  #docvars(tokens_clean, "date") <- barbie_oppenheimer_posts$Post.Date
+  #head(docvars(tokens_clean))
 # create a document document-feature matrix and group it by day
 
+#dfm_clean <- dfm_clean %>% 
+#  dfm_select(pattern = "\\d+", selection = "remove", valuetype = "regex") 
+
+# group by date
+print(docvars(corpus_barbie_oppenheimer))
+length(docvars(corpus_barbie_oppenheimer, "date"))  # 确保和 ndoc() 一样
+ndoc(corpus_barbie_oppenheimer)
+corpus_by_day <- corpus_group(corpus_barbie_oppenheimer, groups = docvars(corpus_barbie_oppenheimer, "date"))
+dfm_clean <- dfm_group(dfm_clean, groups = docvars(tokens_clean, "date"))
 
 # prep data + sentiment ratio variable for analysis
-
+dfm_clean <- dfm_lookup(dfm_clean, dictionary = data_dictionary_LSD2015_pos_neg)
+print(dfm_clean)
+  # calculate word count
+docvars(corpus_by_day, "word_count") <- rowSums(dfm_clean)
+  # calculate sentiment ratio
+# docvars(corpus_by_day, "sentiment_ratio") <- 
+#   (docvars(dfm_clean, "positive") - docvars(dfm_clean, "negative")) /
+#   docvars(corpus_by_day, "word_count")
+dfm_sentiment_df <- convert(dfm_clean, to = "data.frame")
+dfm_sentiment_df$sentiment_ratio <- 
+  (dfm_sentiment_df$positive - dfm_sentiment_df$negative) /
+  (dfm_sentiment_df$positive + dfm_sentiment_df$negative + 1)
 
 # basic plot: frequency of positive words
 
+ggplot(dfm_sentiment_df, aes(x = positive)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "white") +
+  theme_minimal() +
+  labs(title = "Distribution of Positive Words",
+       x = "Positive Word Count",
+       y = "Frequency")
 
 # basic plot: frequency of positive/negative words
 
 ```
+```{r}
+dfm_sentiment_df$date <- docvars(corpus_by_day, "date")
 
+positive_by_day <- dfm_sentiment_df %>%
+  group_by(date) %>%
+  summarise(total_positive = sum(positive, na.rm = TRUE))
+
+ggplot(positive_by_day, aes(x = as.Date(date), y = total_positive)) +
+  geom_line(color = "blue") +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Daily Positive Word Frequency",
+       x = "Date",
+       y = "Positive Word Count")
+```
